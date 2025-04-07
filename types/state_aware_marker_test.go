@@ -1,12 +1,20 @@
 package types
 
 import (
+	"context"
+	"database/sql"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/gofrs/uuid"
+	"github.com/marcboeker/go-duckdb"
 	_ "github.com/marcboeker/go-duckdb"
+	"github.com/prometheus/alertmanager/types/internal"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
@@ -140,8 +148,6 @@ func TestStateAwareMarker_Count(t *testing.T) {
 	marker.SetActiveOrSilenced(a3.Fingerprint(), 1, nil, nil)
 	require.Equal(t, 2, countByState(AlertStateActive))
 	require.Equal(t, 3, countTotal())
-
-	t.Logf("currentStatus of a3: %v", marker.Status(a3.Fingerprint()))
 }
 
 // TestStateAwareMarker_Duplicate ensurs that when you call the same function twice, e.g.
@@ -323,4 +329,85 @@ func TestStateAwareMarker_SetInhibited_NoInhibition(t *testing.T) {
 
 	marker.SetInhibited(a1.Fingerprint())
 	marker.SetInhibited(a2.Fingerprint())
+}
+
+func TestDuckDBAppender_Append(t *testing.T) {
+	if _, err := os.Stat("test.db"); os.IsNotExist(err) {
+		t.Skipf("test.db DuckDB doesn't exist, skipping test")
+
+		return
+	}
+
+	mock := gomock.NewController(t)
+
+	connector, err := duckdb.NewConnector("test.db", nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	conn, err := connector.Connect(context.Background())
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	defer conn.Close()
+
+	sqlDB := sql.OpenDB(connector)
+	defer sqlDB.Close()
+	db := internal.New(sqlDB)
+
+	logHandler := NewMockHandler(mock)
+	logHandler.EXPECT().Enabled(gomock.Any(), gomock.Any()).AnyTimes().Return(true)
+	logHandler.EXPECT().
+		Handle(gomock.Any(), gomock.Any()).
+		AnyTimes().
+		Do(func(ctx context.Context, r slog.Record) {
+			r.Attrs(
+				func(a slog.Attr) bool {
+					if a.Key == "error" {
+						assert.NoError(t, a.Value.Any().(error))
+						t.FailNow()
+					}
+					return false
+				},
+			)
+		})
+
+	appender, err := NewDuckDBStateAppender(t.Context(), conn, slog.New(logHandler))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	defer appender.Close()
+
+	now := time.Now()
+	a1 := model.Alert{
+		StartsAt: now.Add(-2 * time.Minute),
+		EndsAt:   now.Add(2 * time.Minute),
+		Labels:   model.LabelSet{"test": "active"},
+	}
+
+	tx, err := sqlDB.BeginTx(t.Context(), nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	if err := db.WithTx(tx).InsertAlert(t.Context(), internal.InsertAlertParams{
+		Fingerprint: a1.Fingerprint().String(),
+		Alertname:   "test",
+		ID:          uuid.Must(uuid.NewV7()),
+	}); !assert.NoError(t, err) {
+		return
+	}
+
+	if err := tx.Commit(); !assert.NoError(t, err) {
+		return
+	}
+
+	appender.Append(a1.Fingerprint(), AlertStateActive)
+	appender.Append(a1.Fingerprint(), AlertStateSuppressed)
+	appender.Append(a1.Fingerprint(), AlertStateDeleted)
+	if err := appender.db.Flush(); !assert.NoError(t, err) {
+		return
+	}
 }

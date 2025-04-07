@@ -38,6 +38,10 @@ const (
 	// TODO(khellemun): add firing state
 )
 
+func (s AlertState) String() string {
+	return string(s)
+}
+
 // AlertStatus stores the state of an alert and, as applicable, the IDs of
 // silences silencing the alert and of other alerts inhibiting the alert. Note
 // that currently, SilencedBy is supposed to be the complete set of the relevant

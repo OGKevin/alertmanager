@@ -7,6 +7,7 @@
 /.release
 /.tarballs
 /vendor
+test.db
 
 !.golangci.yml
 !/cli/testdata/*.yml

@@ -1,12 +1,20 @@
 //go:generate mockgen -package types -destination appender_mock_test.go . StateAppender
+//go:generate mockgen -package types -destination appender_log_mock_test.go log/slog Handler
 package types
 
 import (
+	"context"
+	"database/sql/driver"
+	"fmt"
+	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 
+	"github.com/google/uuid"
+	"github.com/marcboeker/go-duckdb"
 	_ "github.com/marcboeker/go-duckdb"
 )
 
@@ -39,6 +47,90 @@ type StateAppender interface {
 	// flush has been called. This method is here to expose this functionablility if the caller
 	// needs to read the appended data from storage.
 	Flush() error
+}
+
+func NewDuckDBStateAppender(
+	ctx context.Context,
+	conn driver.Conn,
+	l *slog.Logger,
+) (*DuckDBStateAppender, error) {
+	appender, err := duckdb.NewAppenderFromConn(conn, "main", "alert_states")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new appender: %w", err)
+	}
+
+	return &DuckDBStateAppender{appender, l}, nil
+}
+
+// DuckDBStateAppender implements StateAppender
+type DuckDBStateAppender struct {
+	db *duckdb.Appender
+	l  *slog.Logger
+}
+
+func (d *DuckDBStateAppender) Close() error {
+	return d.db.Close()
+}
+
+func (d *DuckDBStateAppender) Flush() error {
+	if err := d.db.Flush(); err != nil {
+		return fmt.Errorf("failed to flush duckdb state appender: %w", err)
+	}
+	return nil
+}
+
+func (d *DuckDBStateAppender) Append(fingerprint model.Fingerprint, state AlertState) {
+	id := uuid.Must(uuid.NewV7())
+	var err error
+
+	defer func() {
+		if err != nil {
+			d.l.Error("failed to append alert state in db", slog.Any("error", err))
+		}
+	}()
+
+	idBinary, err := id.MarshalBinary()
+	if err != nil {
+		return
+	}
+
+	if state == AlertStateSuppressed {
+		err = d.db.AppendRow(
+			idBinary,
+			time.Now(),
+			fingerprint.String(),
+			state.String(),
+			nil,
+			"silenced",
+		)
+
+		return
+	}
+
+	err = d.db.AppendRow(idBinary, time.Now(), fingerprint.String(), state.String(), nil, nil)
+}
+
+func (d *DuckDBStateAppender) AppendInhibited(fingerprint model.Fingerprint, inhibitedBy []string) {
+	// TODO(khellemun): change table to many to many
+	id := uuid.Must(uuid.NewV7())
+
+	idBinary, err := id.MarshalBinary()
+	if err != nil {
+		return
+	}
+
+	err = d.db.AppendRow(
+		idBinary,
+		time.Now(),
+		fingerprint.String(),
+		AlertStateSuppressed.String(),
+		inhibitedBy[0],
+		"inhibited",
+	)
+
+	if err != nil {
+		d.l.Error("failed to append inhibited alert state in db", slog.Any("error", err))
+	}
 }
 
 func NewStateAwareMarker(

@@ -7,14 +7,21 @@ package internal
 
 import (
 	"context"
+
+	"github.com/gofrs/uuid"
 )
 
-const placeHolder = `-- name: PlaceHolder :exec
-select
-  1
+const insertAlert = `-- name: InsertAlert :exec
+insert into alerts (id, fingerprint, alertname) values ($1, $2, $3) on conflict do nothing
 `
 
-func (q *Queries) PlaceHolder(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, placeHolder)
+type InsertAlertParams struct {
+	ID          uuid.UUID
+	Fingerprint string
+	Alertname   string
+}
+
+func (q *Queries) InsertAlert(ctx context.Context, arg InsertAlertParams) error {
+	_, err := q.db.ExecContext(ctx, insertAlert, arg.ID, arg.Fingerprint, arg.Alertname)
 	return err
 }
