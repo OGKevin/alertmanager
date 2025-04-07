@@ -1,0 +1,39 @@
+# TODO(khellemun): add sqlc make target
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "types/queries.sql"
+    schema: "analytics/schema.sql"
+    gen:
+      go:
+        package: "internal"
+        out: "types/internal"
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/gofrs/uuid"
+              type: "UUID"
+          - db_type: "uinteger"
+            go_type:
+              type: "uint"
+          - db_type: "ubigint"
+            go_type:
+              type: "uint64"
+  - engine: "postgresql"
+    queries: "analytics/queries.sql"
+    schema: "analytics/schema.sql"
+    gen:
+      go:
+        package: "internal"
+        out: "analytics/internal"
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/gofrs/uuid"
+              type: "UUID"
+          - db_type: "uinteger"
+            go_type:
+              type: "uint"
+          - db_type: "ubigint"
+            go_type:
+              type: "uint64"

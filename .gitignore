@@ -19,5 +19,6 @@
 !/circle.yml
 !/.travis.yml
 !/.promu.yml
+!/sqlc.yaml
 !/api/v2/openapi.yaml
 !.github/workflows/*.yml
